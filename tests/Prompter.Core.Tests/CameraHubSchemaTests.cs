@@ -73,6 +73,102 @@ public class CameraHubSchemaTests
     }
 
     [Fact]
+    public void SetLibraryList_OnFreshDocument_UsesRealFlatShape()
+    {
+        // Verified against a live Camera Hub install: the real on-disk shape is a single
+        // flat, dot-containing top-level property, not a nested object graph.
+        var root = new JsonObject();
+        var ids = new[] { Guid.NewGuid() };
+
+        CameraHubSchema.SetLibraryList(root, ids);
+
+        Assert.True(root.ContainsKey(CameraHubSchema.LibraryListPropertyPath));
+        Assert.False(root.ContainsKey("applogic"));
+    }
+
+    [Fact]
+    public void ValidateLibraryList_FlatRealShape_ExtractsIds()
+    {
+        // Matches the actual shape observed in a live Camera Hub AppSettings.json: a
+        // top-level property literally named "applogic.prompter.libraryList".
+        var id1 = Guid.NewGuid();
+        var id2 = Guid.NewGuid();
+        var json = $$"""
+        { "applogic.prompter.libraryList": ["{{id1}}", "{{id2}}"] }
+        """;
+
+        var result = CameraHubSchema.ValidateLibraryList(JsonNode.Parse(json));
+
+        Assert.True(result.IsValid);
+        Assert.Equal([id1, id2], result.Ids);
+    }
+
+    [Fact]
+    public void ValidateLibraryList_FlatRealShape_NotArray_IsSchemaDrift()
+    {
+        var root = JsonNode.Parse("""{ "applogic.prompter.libraryList": "not-an-array" }""");
+        var result = CameraHubSchema.ValidateLibraryList(root);
+
+        Assert.False(result.IsValid);
+        Assert.NotNull(result.Error);
+    }
+
+    [Fact]
+    public void ValidateLibraryList_FlatRealShape_NonGuidEntry_IsSchemaDrift()
+    {
+        var root = JsonNode.Parse("""{ "applogic.prompter.libraryList": ["not-a-guid"] }""");
+        var result = CameraHubSchema.ValidateLibraryList(root);
+
+        Assert.False(result.IsValid);
+    }
+
+    [Fact]
+    public void ValidateLibraryList_FlatShapeTakesPriorityOverNested()
+    {
+        var flatId = Guid.NewGuid();
+        var nestedId = Guid.NewGuid();
+        var json = $$"""
+        {
+            "applogic.prompter.libraryList": ["{{flatId}}"],
+            "applogic": { "prompter": { "libraryList": ["{{nestedId}}"] } }
+        }
+        """;
+
+        var result = CameraHubSchema.ValidateLibraryList(JsonNode.Parse(json));
+
+        Assert.True(result.IsValid);
+        Assert.Equal([flatId], result.Ids);
+    }
+
+    [Fact]
+    public void SetLibraryList_PreservesExistingFlatShape()
+    {
+        var root = (JsonObject)JsonNode.Parse("""{ "applogic.prompter.libraryList": [] }""")!;
+        var ids = new[] { Guid.NewGuid() };
+
+        CameraHubSchema.SetLibraryList(root, ids);
+
+        Assert.True(root.ContainsKey(CameraHubSchema.LibraryListPropertyPath));
+        var result = CameraHubSchema.ValidateLibraryList(root);
+        Assert.True(result.IsValid);
+        Assert.Equal(ids, result.Ids);
+    }
+
+    [Fact]
+    public void SetLibraryList_PreservesExistingLegacyNestedShape()
+    {
+        var root = (JsonObject)JsonNode.Parse("""{ "applogic": { "prompter": { "libraryList": [] } } }""")!;
+        var ids = new[] { Guid.NewGuid() };
+
+        CameraHubSchema.SetLibraryList(root, ids);
+
+        Assert.False(root.ContainsKey(CameraHubSchema.LibraryListPropertyPath));
+        var result = CameraHubSchema.ValidateLibraryList(root);
+        Assert.True(result.IsValid);
+        Assert.Equal(ids, result.Ids);
+    }
+
+    [Fact]
     public void ValidateText_WellFormed_IsValid()
     {
         var record = new CameraHubTextRecord(Guid.NewGuid(), ["Chapter one.", "Chapter two."], "My Script", 0);

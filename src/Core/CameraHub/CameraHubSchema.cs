@@ -6,14 +6,26 @@ namespace Prompter.Core.CameraHub;
 
 /// <summary>
 /// Structural validation for the slice of Elgato Camera Hub's on-disk schema that prompter
-/// touches. Deliberately conservative: prompter only understands
-/// <c>applogic.prompter.libraryList</c> inside <c>AppSettings.json</c> and the
+/// touches. Deliberately conservative: prompter only understands the
+/// <c>applogic.prompter.libraryList</c> entry inside <c>AppSettings.json</c> and the
 /// <c>Texts/&lt;GUID&gt;.json</c> shape, so anything that doesn't match those exact shapes is
 /// reported as schema drift rather than guessed at or overwritten.
+///
+/// Real Camera Hub installs (verified against a live install) store this as a single
+/// <b>flat</b> top-level JSON property whose name is the literal, dot-containing string
+/// <c>"applogic.prompter.libraryList"</c> — not a nested <c>{ "applogic": { "prompter": {
+/// "libraryList": [...] } } }</c> object graph. Flat is treated as the authoritative shape.
+/// A legacy nested shape is still accepted when reading (for resilience against
+/// undocumented Camera Hub variants), but writes always mirror back whichever shape was
+/// actually present, defaulting to flat for a brand-new file since that's what real Camera
+/// Hub understands.
 /// </summary>
 public static class CameraHubSchema
 {
-    /// <summary>Dotted path prompter reads/writes inside AppSettings.json.</summary>
+    /// <summary>
+    /// The literal (flat, dotted) top-level property name Camera Hub uses in
+    /// AppSettings.json. This is a single property name, not a nested path.
+    /// </summary>
     public const string LibraryListPropertyPath = "applogic.prompter.libraryList";
 
     public sealed record LibraryListValidation(bool IsValid, IReadOnlyList<Guid> Ids, string? Error)
@@ -23,10 +35,12 @@ public static class CameraHubSchema
     }
 
     /// <summary>
-    /// Validates and extracts <c>applogic.prompter.libraryList</c> from a parsed
-    /// AppSettings.json document. A missing key at any level is treated as "no prompter
-    /// data yet" (valid, empty list) rather than drift, since that's the expected state on
-    /// a fresh Camera Hub install. A key present with an unexpected shape is drift.
+    /// Validates and extracts the prompter library list from a parsed AppSettings.json
+    /// document. Checks the real, flat <c>"applogic.prompter.libraryList"</c> property
+    /// first; falls back to the legacy nested shape if the flat property is absent. A
+    /// missing key (in either shape) is treated as "no prompter data yet" (valid, empty
+    /// list) rather than drift, since that's the expected state on a fresh Camera Hub
+    /// install. A key present with an unexpected shape is drift.
     /// </summary>
     public static LibraryListValidation ValidateLibraryList(JsonNode? root)
     {
@@ -40,6 +54,12 @@ public static class CameraHubSchema
             return LibraryListValidation.Fail("AppSettings.json root is not a JSON object.");
         }
 
+        if (TryGetChild(rootObject, LibraryListPropertyPath, out var flatListNode))
+        {
+            return ParseLibraryListArray(flatListNode, LibraryListPropertyPath);
+        }
+
+        // Legacy fallback: nested { "applogic": { "prompter": { "libraryList": [...] } } }.
         if (!TryGetChild(rootObject, "applogic", out var applogicNode))
         {
             return LibraryListValidation.Ok([]);
@@ -65,9 +85,14 @@ public static class CameraHubSchema
             return LibraryListValidation.Ok([]);
         }
 
+        return ParseLibraryListArray(listNode, "applogic.prompter.libraryList");
+    }
+
+    private static LibraryListValidation ParseLibraryListArray(JsonNode? listNode, string propertyDescription)
+    {
         if (listNode is not JsonArray array)
         {
-            return LibraryListValidation.Fail("'applogic.prompter.libraryList' is present but is not a JSON array (possible schema drift).");
+            return LibraryListValidation.Fail($"'{propertyDescription}' is present but is not a JSON array (possible schema drift).");
         }
 
         var ids = new List<Guid>();
@@ -75,7 +100,7 @@ public static class CameraHubSchema
         {
             if (item is not JsonValue value || !value.TryGetValue<string>(out var text) || !Guid.TryParse(text, out var id))
             {
-                return LibraryListValidation.Fail("'applogic.prompter.libraryList' contains an entry that is not a GUID string (possible schema drift).");
+                return LibraryListValidation.Fail($"'{propertyDescription}' contains an entry that is not a GUID string (possible schema drift).");
             }
 
             ids.Add(id);
@@ -85,32 +110,42 @@ public static class CameraHubSchema
     }
 
     /// <summary>
-    /// Writes <paramref name="ids"/> back into <paramref name="root"/> at
-    /// <c>applogic.prompter.libraryList</c>, creating intermediate objects as needed.
-    /// Caller must have already validated the existing shape with
-    /// <see cref="ValidateLibraryList"/> to avoid clobbering unexpected structures.
+    /// Writes <paramref name="ids"/> back into <paramref name="root"/>'s prompter library
+    /// list. Mirrors whichever shape was already present (flat property takes priority;
+    /// falls back to the legacy nested shape if that's what exists and the flat property is
+    /// absent); defaults to the real, flat shape for a brand-new document, since that's what
+    /// an actual Camera Hub install reads. Caller must have already validated the existing
+    /// shape with <see cref="ValidateLibraryList"/> to avoid clobbering unexpected
+    /// structures.
     /// </summary>
     public static void SetLibraryList(JsonObject root, IReadOnlyList<Guid> ids)
     {
-        if (!TryGetChild(root, "applogic", out var applogicNode) || applogicNode is not JsonObject applogicObject)
-        {
-            applogicObject = new JsonObject();
-            root["applogic"] = applogicObject;
-        }
-
-        if (!TryGetChild(applogicObject, "prompter", out var prompterNode) || prompterNode is not JsonObject prompterObject)
-        {
-            prompterObject = new JsonObject();
-            applogicObject["prompter"] = prompterObject;
-        }
-
         var array = new JsonArray();
         foreach (var id in ids)
         {
             array.Add((JsonNode?)JsonValue.Create(id.ToString()));
         }
 
-        prompterObject["libraryList"] = array;
+        if (root.ContainsKey(LibraryListPropertyPath))
+        {
+            root[LibraryListPropertyPath] = array;
+            return;
+        }
+
+        if (TryGetChild(root, "applogic", out var applogicNode) && applogicNode is JsonObject applogicObject)
+        {
+            if (!TryGetChild(applogicObject, "prompter", out var prompterNode) || prompterNode is not JsonObject prompterObject)
+            {
+                prompterObject = new JsonObject();
+                applogicObject["prompter"] = prompterObject;
+            }
+
+            prompterObject["libraryList"] = array;
+            return;
+        }
+
+        // Brand-new document: use the real, flat shape that Camera Hub actually reads.
+        root[LibraryListPropertyPath] = array;
     }
 
     public sealed record TextValidation(bool IsValid, string? Error);
