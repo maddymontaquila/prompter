@@ -1,0 +1,20 @@
+# Build artifacts
+bin/
+obj/
+
+# .NET / file-based app run cache
+artifacts/
+nupkg/
+*.user
+
+# Rider / VS
+.vs/
+.idea/
+*.suo
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Local test/dev scratch data - never commit real Camera Hub or library fixtures here
+.prompter-scratch/
