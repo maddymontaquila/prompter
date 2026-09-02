@@ -22,6 +22,12 @@ namespace Prompter.Tui;
 /// the most common actions. Non-colon text in the same box is a live name filter. This keeps
 /// the whole interaction model deterministic and reasoned-about without needing a live terminal
 /// to verify focus transfer at runtime.
+///
+/// Tab order (verified with the Hex1b.Tool headless terminal harness): command box → script
+/// list → the <c>HSplitter</c> pane divider (itself a focus stop that Hex1b uses for
+/// arrow-key resizing) → the multiline script editor, then wraps. The divider stop is a Hex1b
+/// framework behavior, not app-specific, and is called out in the in-app status hint and README
+/// so it isn't mistaken for a dead Tab press.
 /// </summary>
 public static class PrompterApp
 {
@@ -36,7 +42,7 @@ public static class PrompterApp
         Guid? selectedId = null;
         Guid? pendingDeleteId = null;
         var dirty = false;
-        var status = "Tab: cycle focus  •  type to filter  •  ':' for commands (':help' lists them)";
+        var status = "Tab: cycle focus (list → divider → editor)  •  type to filter  •  ':' for commands (':help' lists them)";
 
         var commandState = new TextBoxState("");
         var editorState = new TextBoxState("");
@@ -115,6 +121,12 @@ public static class PrompterApp
             if (!summary.CameraHubFound) { status = "Camera Hub data directory not found."; return; }
             if (!summary.Success) { status = $"Pull failed: {summary.FatalError}"; return; }
             Refresh();
+            if (Selected() is null)
+            {
+                // Keep the editor pane in sync with the list, which auto-focuses its first row
+                // even when nothing was selected before an import into a previously-empty library.
+                LoadIntoEditor(scripts.FirstOrDefault());
+            }
             var imported = summary.Outcomes.Count(o => o.Action == "imported");
             var skipped = summary.Outcomes.Count(o => o.Action == "skipped-conflict");
             var malformed = summary.Outcomes.Count(o => o.Action == "skipped-malformed");

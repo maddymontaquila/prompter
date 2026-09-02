@@ -77,7 +77,8 @@ command name). The keybinding hints in the status bar are also shown in-app:
 
 | Action                       | Keys                                  |
 |-------------------------------|----------------------------------------|
-| Cycle focus (list / editor / command box) | `Tab` / `Shift+Tab`       |
+| Cycle focus (command box → list → pane divider → editor) | `Tab` / `Shift+Tab` |
+| Resize the list/editor split (while the divider has focus) | `Left`/`Right` arrows |
 | Filter the script list         | Type in the command box               |
 | Save the selected script       | `Ctrl+S`                              |
 | Reorder selected script        | `Ctrl+Up` / `Ctrl+Down`                |
